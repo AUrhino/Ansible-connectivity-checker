@@ -1,0 +1,166 @@
+---
+
+# Quick playbook to ping, ssh (via nc) and snmpwalk (assume v2 with comm string of ddgsoa10)
+#  Output saved to a csv file.
+# Ver 1.2
+#
+# Update the inventory via:
+#  /etc/ansible/hosts
+# Run the playbook via:
+#  rm test_connectivity_results.csv; ansible-playbook test_connectivity.yaml
+#
+
+- name: Connectivity testing PING, SSH and SNMP
+  hosts: all 
+  #hosts: nul-w*
+  connection: local
+  gather_facts: false
+  serial: 1
+  vars:
+    # Output to save the results.
+    csv_file: /root/test_connectivity_results_WIP.csv
+
+  tasks:
+    - name: Testing Ping to the device using fping
+      tags: 
+        - ping
+      shell: /usr/bin/fping {{ inventory_hostname }}
+      register: ping_result
+      ignore_errors: true
+      delegate_to: localhost
+
+    - name: Testing SSH port via nc
+      tags:
+        - ssh
+      #shell: ssh -o ConnectTimeout=5 {{ inventory_hostname }} exit   # Turned off as too hard at the moment. Will just nc to port
+      #Sample NetCat on port 22:    nc -vznw1 10.37.32.244 22
+      #shell: /usr/bin/nc -vznw1 {{ inventory_hostname }} 22 || echo "ssh is DOWN"
+      shell: /usr/bin/nc -vznw1 {{ inventory_hostname }} 22
+      register: ssh_result
+      ignore_errors: true
+      delegate_to: localhost
+
+    - name: Testing SNMP via nc
+      tags:
+        - snmp
+      shell: snmpwalk -v2c -c  {{ snmp_community }} {{ inventory_hostname }} 1.3.6.1.2.1.1.5.0 
+      #shell: /usr/bin/nc -zuvnw1 {{ inventory_hostname }} 161
+      register: snmp_result
+      ignore_errors: true
+      delegate_to: localhost
+
+    - name: Testing WMI via nc
+      tags:
+        - wmi
+      shell: /usr/bin/nc -vnw1 {{ inventory_hostname }} 5985
+      register: wmi_result
+      ignore_errors: true
+      delegate_to: localhost
+      when: inventory_hostname in groups['wmiservers']
+
+    - name: Testing WEB/ssl via nc
+      tags:
+        - web
+      shell: /usr/bin/nc -vnw1 {{ inventory_hostname }} 443
+      register: web_result
+      ignore_errors: true
+      delegate_to: localhost
+      when: inventory_hostname in groups['webcheck']
+
+    - name: Testing SQL via nc
+      tags:
+        - sql
+      shell: /usr/bin/nc -vnw1 {{ inventory_hostname }} 1433
+      register: web_result
+      ignore_errors: true
+      delegate_to: localhost
+      when: inventory_hostname in groups['sqlcheck']
+
+ # Create and write to a file
+    - name: Create a CSV file
+      tags:
+        - always
+      local_action:
+        module: file
+        path: "{{ csv_file }}"
+        state: touch
+      delegate_to: localhost
+
+    - name: Append Ping result to the CSV
+      tags:
+        - ping
+      local_action:
+        module: lineinfile
+        path: "{{ csv_file }}"
+        line: "{{ inventory_hostname }},Ping,{{ 'SUCCESS' if ping_result.rc == 0 else 'FAILED' }}"
+      delegate_to: localhost
+
+    - name: Append SSH result to the CSV
+      tags:
+        - ssh
+      local_action:
+        module: lineinfile
+        path: "{{ csv_file }}"
+        line: "{{ inventory_hostname }},SSH,{{ ssh_result.stderr | replace('(UNKNOWN) ', '') }}"
+      delegate_to: localhost
+
+    - name: Append SNMP result to the CSV
+      tags:
+        - snmp
+      local_action:
+        module: lineinfile
+        path: "{{ csv_file }}"
+        #line: "{{ inventory_hostname }},SNMP,{{ snmp_result.stderr | replace('(UNKNOWN) ', '') }}"
+        line: "{{ inventory_hostname }},SNMP,{{ 'SUCCESS' if snmp_result.rc == 1 else 'FAILED' }}"
+      delegate_to: localhost
+
+    - name: Append WMI result to the CSV
+      tags:
+        - wmi
+      local_action:
+        module: lineinfile
+        path: "{{ csv_file }}"
+        #line: "{{ inventory_hostname }},WMI,{{ 'SUCCESS' if snmp_result.rc == 1 else 'FAILED' }}"
+        line: "{{ inventory_hostname }},WMI,{{ wmi_result.stderr | replace('(UNKNOWN) ', '') }}"
+      delegate_to: localhost
+      when: inventory_hostname in groups['wmiservers']
+
+    - name: Append WEB result to the CSV
+      tags:
+        - web
+      local_action:
+        module: lineinfile
+        path: "{{ csv_file }}"
+        #line: "{{ inventory_hostname }},WEB,{{ 'SUCCESS' if web_result.rc == 1 else 'FAILED' }}"
+        line: "{{ inventory_hostname }},WEB,{{ wmi_result.stderr | replace('(UNKNOWN) ', '') }}"
+      delegate_to: localhost
+      when: inventory_hostname in groups['webcheck']
+
+    - name: Append SQL result to the CSV
+      tags:
+        - sql
+      local_action:
+        module: lineinfile
+        path: "{{ csv_file }}"
+        line: "{{ inventory_hostname }},SQL,{{ 'SUCCESS' if sql_result.rc == 1 else 'FAILED' }}"
+      delegate_to: localhost
+      when: inventory_hostname in groups['sqlcheck']
+
+# --------------------------------------
+# Netcat overview:
+#Connection timed out
+# Indicates that your connection is not working, which could mean your firewall is blocking the port.
+#
+#Connection refused
+# The service isn’t running, or a firewall is rejecting the connection. On the device, verify the process status eg ps
+#
+#Connection succeeded
+# If the initial connection succeeds, Netcat can connect to the service.
+#
+#Closing the connection
+# You can terminate the connection by either pressing Ctrl-C or type the service-specific quit command. eg ftp
+#
+#No route to host
+# Your no route to host while the machine is ping-able is the sign of a firewall that denies you access politely. Usually iptables or an acl
+
+# EOF
